@@ -1,0 +1,122 @@
+import os  # Permite interactuar con el sistema operativo (ej. manejo de archivos y directorios)
+import pandas as pd  # Permite el manejo de datos en estructuras como DataFrames, especialmente útil para guardar en Excel
+import re  # Permite trabajar con expresiones regulares, útiles para buscar patrones en el texto
+from datetime import datetime  # Permite trabajar con fechas y horas
+
+# Patrón de expresión regular para extraer los detalles de cada mensaje del chat
+message_pattern = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}\s?[ap]\.?\s?m\.?) - (.+): (.+)$")
+
+# Patrón de expresión regular para mensajes del sistema que contienen "cifrado de extremo a extremo"
+system_message_pattern = re.compile(r"(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}\s?[ap]\.?\s?m\.?) - .*cifrado de extremo a extremo.*")
+
+# Función para limpiar el texto eliminando caracteres indeseados y espacios extra
+def clean_text(text):
+    text = text.replace('\u202F', ' ').replace('\xa0', ' ').strip()  # Reemplaza caracteres no estándar por espacios y recorta los espacios
+    return text
+
+# Función que procesa un archivo de chat, filtra por fecha y extrae la información de los mensajes
+def parse_chat_file(file_path, start_date, end_date):
+    with open(file_path, "r", encoding="utf-8") as file:
+        lines = file.readlines()  # Lee todas las líneas del archivo de chat
+
+    chat_data = []  # Lista para almacenar los datos procesados del chat
+    current_date, current_time, current_user, current_message = None, None, None, ""  # Variables para almacenar datos temporales
+
+    print(f"\U0001F4C2 Procesando archivo: {file_path}")  # Muestra el archivo que se está procesando
+
+    # Recorre cada línea del archivo
+    for line in lines:
+        line = clean_text(line)  # Limpia la línea de texto
+
+        if system_message_pattern.match(line):  # Si la línea es un mensaje del sistema, se ignora
+            continue
+
+        match = message_pattern.match(line)  # Intenta hacer match con el patrón de mensaje
+
+        if match:  # Si se encuentra un match, extrae los detalles del mensaje
+            if current_date and start_date <= current_date <= end_date:  # Si hay un mensaje anterior dentro del rango de fechas
+                # Agrega el mensaje procesado a la lista
+                chat_data.append([f"{current_date.strftime('%d/%m/%Y')} {current_time}", current_user, current_message])
+            
+            # Extrae los datos del mensaje actual (fecha, hora, usuario, mensaje)
+            date_str, time_str, user, message = match.groups()
+            try:
+                current_date = datetime.strptime(date_str, "%d/%m/%Y")  # Convierte la fecha a formato datetime
+            except ValueError:
+                continue  # Si la fecha es inválida, se ignora esa línea
+            
+            if start_date <= current_date <= end_date:  # Si el mensaje está dentro del rango de fechas
+                current_time, current_user, current_message = time_str, user, message  # Asigna los valores al mensaje actual
+        
+        elif current_date and start_date <= current_date <= end_date:  # Si el mensaje no tiene formato específico pero está dentro del rango
+            current_message += " " + line.strip()  # Se agrega el contenido al mensaje actual
+
+    # Al final del archivo, si hay un mensaje pendiente, se agrega
+    if current_date and start_date <= current_date <= end_date:
+        chat_data.append([f"{current_date.strftime('%d/%m/%Y')} {current_time}", current_user, current_message])
+    
+    if chat_data:  # Si se encontraron mensajes procesados
+        chat_data.append(["", "", ""])  # Agrega una fila en blanco al final del archivo procesado
+    
+    return chat_data  # Retorna la lista de datos procesados
+
+# Función para guardar los datos procesados en un archivo Excel
+def save_to_excel(chat_files, start_date, end_date, output_file):
+    all_data = []  # Lista para almacenar todos los datos de los archivos procesados
+    for chat_file in chat_files:  # Itera sobre cada archivo de chat
+        chat_data = parse_chat_file(chat_file, start_date, end_date)  # Procesa el archivo de chat
+        all_data.extend(chat_data)  # Agrega los datos procesados a la lista global
+
+    if not all_data:  # Si no se encontraron datos
+        print("⚠ No se encontraron mensajes dentro del rango de fechas.")
+        return
+
+    # Crea un DataFrame de pandas con los datos procesados
+    df = pd.DataFrame(all_data, columns=["Fecha y Hora", "Remitente", "Mensaje"])
+
+    try:
+        # Intenta guardar el DataFrame en un archivo Excel
+        df.to_excel(output_file, index=False, engine='openpyxl')
+        print(f"✅ Datos guardados en {output_file}")
+    except Exception as e:  # Si ocurre un error al guardar el archivo
+        print(f"❌ Error al guardar el archivo Excel: {e}")
+
+# Función principal que se ejecuta al correr el script
+def main():
+    # Solicita al usuario la ruta del directorio donde se encuentran los archivos de chat
+    input_dir = input("📂 Ingrese la ruta del directorio con los archivos de chat: ").strip()
+
+    if not os.path.isdir(input_dir):  # Verifica si la ruta proporcionada es válida
+        print("❌ La ruta proporcionada no es válida.")
+        return
+
+    # Filtra los archivos .txt en el directorio especificado
+    chat_files = [os.path.join(input_dir, file) for file in os.listdir(input_dir) if file.endswith(".txt")]
+
+    if not chat_files:  # Si no se encuentran archivos .txt
+        print("❌ No se encontraron archivos .txt en el directorio especificado.")
+        return
+
+    try:
+        # Solicita las fechas de inicio y fin para el rango de mensajes
+        start_date_str = input("📅 Ingrese la fecha de inicio (dd/mm/yyyy): ").strip()
+        end_date_str = input("📅 Ingrese la fecha de fin (dd/mm/yyyy): ").strip()
+        start_date = datetime.strptime(start_date_str, "%d/%m/%Y")
+        end_date = datetime.strptime(end_date_str, "%d/%m/%Y")
+        if start_date > end_date:  # Verifica que la fecha de inicio no sea mayor que la de fin
+            print("❌ La fecha de inicio no puede ser mayor que la fecha de fin.")
+            return
+    except ValueError:  # Si las fechas no tienen el formato correcto
+        print("❌ Formato de fecha inválido. Use dd/mm/yyyy.")
+        return
+
+    # Define el nombre del archivo de salida con la fecha actual
+    current_time = datetime.now().strftime("%Y-%m-%d")
+    output_file = f"WhatsApp_Chat_Export_{current_time}.xlsx"
+    
+    # Llama a la función para guardar los datos en el archivo Excel
+    save_to_excel(chat_files, start_date, end_date, output_file)
+
+# Si el script se ejecuta directamente, se llama a la función main
+if __name__ == "__main__":
+    main()
